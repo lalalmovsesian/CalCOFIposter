@@ -1,5 +1,1013 @@
 ---
-title: "index"
+title: "Climate-linked changes in krill body size in the California Current: 
+contrasting responses among dominant species"
+subtitle: "supplemental figures"
+author: Lala Movsesian
 format: html
+toc: true
+execute:
+  echo: false
+  warning: false
+  message: false
 ---
 
+```{r}
+#setup code - hidden
+library(here)
+library(readxl)
+library(tidyverse)
+library(ggplot2)
+library(viridis)
+library(leaflet)
+library(broom.mixed)
+library(DT)
+library(mgcv)
+library(purrr)
+library(patchwork)
+library(ggeffects)
+library(gratia)
+library(janitor)
+library(sf)
+library(plotly)
+
+raw_data <- read_excel(here("data", "raw", "krill_size.xlsx"))
+raw_data_2025 <- read_excel(here("data", "raw", "2025_krill_size.xlsx"))
+moci_data <- read.csv(here("data", "raw", "CaliforniaMOCI_long.csv"))
+loc_data <- read_excel(here("data","raw", "locdata.xlsx"))
+climate_raw <- read_excel(here("data","raw", "climate_ocean_indices.xlsx"))
+tow_data <- read_excel(here("data","raw", "tow_data.xlsx"))
+
+
+```
+
+```{r}
+# adding loc and tow data
+data_2025 <-
+clean_names(raw_data_2025) %>%
+  rename(jar = id_jar)
+
+  data_2025$line <- as.character(data_2025$line)
+
+data_all <- bind_rows (raw_data, data_2025) %>%
+  mutate(base_date = make_date(
+      year  = 2000 + as.numeric(substr(cruise, 4, 5)),
+      month = as.numeric(substr(cruise, 6, 7)),
+      day   = 1))%>% 
+  relocate(base_date, .after = date)
+
+tow_data <- clean_names(tow_data) %>%
+  rename(jar = id_jar)
+
+data_all <- data_all %>%
+  left_join(
+    tow_data %>% select(lat_in, lon_in, jar, time_in, depth_mean), by = "jar")%>%
+  mutate(time_in = hms::as_hms(time_in))
+
+#adding day/night
+data_all <- data_all %>%
+  mutate(hour = hour(time_in),
+  diel = case_when(
+      hour >= 6 & hour < 18 ~ "day",
+      TRUE ~ "night"))
+
+
+#adding moci as its own column
+
+data_all <- data_all %>%
+  mutate(
+    Year = year(base_date),
+    Month = month(base_date),
+    Season = case_when(
+      Month %in% c(1, 2, 3) ~ "JFM",
+      Month %in% c(4, 5, 6) ~ "AMJ",
+      Month %in% c(7, 8, 9) ~ "JAS",
+      Month %in% c(10, 11, 12) ~ "OND")) %>%
+  left_join(
+    moci_data %>%
+      select(Year, Season, North.California..38.42N.),
+    by = c("Year", "Season")) %>%
+  rename(moci = North.California..38.42N., season = Season, year = Year, month = Month) %>%
+  relocate(season, .after = base_date)
+```
+
+```{r}
+#excluding deb, apr, and oct cruises 
+#imm m/imm f to m/f
+#filtering zoea
+#filtering non-big three
+species_levels <- c("EPAC", "TSPIN", "NDIF")
+data_krill_all <- data_all %>%
+  filter(! month(base_date) %in% c(2, 4, 10)) %>%
+  mutate(
+    type = case_when(
+      type == "imm m" ~ "m",
+      type == "imm f" ~ "f",
+      TRUE ~ type)) %>%
+  filter(type %in% c("juv", "f", "m")) 
+
+data_krill <- data_krill_all %>%
+  filter(species_name %in% c(
+    "EUP Euphausia pacifica",
+    "EUP Nematoscelis difficilis",
+    "EUP Thysanoessa spinifera")) %>%
+  mutate(
+    species_code = case_when(
+      species_name == "EUP Euphausia pacifica" ~ "EPAC",
+      species_name == "EUP Thysanoessa spinifera" ~ "TSPIN",
+      species_name == "EUP Nematoscelis difficilis" ~ "NDIF"))  %>%
+  mutate(
+    species_code = factor(species_code,
+                          levels = species_levels))
+
+species_colors <- c(
+  "EPAC" = "#440154FF",  
+  "TSPIN" = "#7AD151FF",  
+  "NDIF" = "#249F87"  
+)
+
+```
+
+```{r}
+#separate data frames for day and night big 3
+data_day <- data_krill %>%
+  filter(diel == "day")
+
+data_night <- data_krill %>%
+  filter(diel == "night")
+
+#separate data frames for day and night all species
+data_day_all <- data_krill_all %>%
+  filter(diel == "day")
+
+data_night_all <- data_krill_all %>%
+  filter(diel == "night")
+```
+
+```{r}
+#size calcs
+
+
+# midpoint column for length and width 
+df <- data_day%>%
+  mutate(length_mid = (length_l + length_h) / 2) %>%
+  mutate(width_mid = (width_l + width_h) / 2) %>%
+relocate(length_mid, .after = length_h) %>%
+  relocate(width_mid, .after = width_h)
+
+
+#volume calc
+df <- df %>%
+  mutate(volume = (1/3) * pi * (width_mid / 2)^2 * length_mid) %>%
+  relocate(volume, .after = width_mid) %>%
+  filter(!is.na(volume)) 
+
+#mean volume per jar
+
+df_vol <- df %>%
+  group_by(species_code, jar, type, base_date, moci, line, cruise, season, depth_mean) %>%
+  filter(!is.na(tot_num)) %>%
+  summarise(n = sum(tot_num), volume_weighted = sum(volume * tot_num) / n,
+    .groups = "drop")
+
+```
+
+```{r}
+#size calcs for night 
+
+
+# midpoint column for length and width 
+df_night <- data_night%>%
+  mutate(length_mid = (length_l + length_h) / 2) %>%
+  mutate(width_mid = (width_l + width_h) / 2) %>%
+relocate(length_mid, .after = length_h) %>%
+  relocate(width_mid, .after = width_h)
+
+
+#volume calc
+df_night <- df_night %>%
+  mutate(volume = (1/3) * pi * (width_mid / 2)^2 * length_mid) %>%
+  relocate(volume, .after = width_mid) %>%
+  filter(!is.na(volume)) 
+
+#mean volume per jar
+
+df_vol_night <- df_night %>%
+  group_by(species_code, jar, type, base_date, moci, line, cruise, year, season, month, depth_mean) %>%
+  filter(!is.na(tot_num)) %>%
+  summarise(n = sum(tot_num), volume_weighted = sum(volume * tot_num) / n,
+    .groups = "drop")
+```
+
+## Species Composition
+
+The table below shows species composition of daylight euphausiid samples collected from 2005–2025. Counts represent the number of individuals identified for each species, and percentages show each species’ contribution to the total number of individuals observed across all daylight samples.
+
+```{r}
+all_species_count <- data_krill_all %>%
+  group_by(species_name, jar) %>%
+  summarise(total_individuals = sum(tot_num, na.rm = TRUE), .groups = "drop") %>%
+  group_by(jar) %>%   
+  mutate(jar_total = sum(total_individuals),  
+         percent = (total_individuals / jar_total) * 100) %>%
+  ungroup()  
+
+overall_species_percent <- all_species_count %>%
+  group_by(species_name) %>%
+  filter(species_name != "EUP Euphausiidae") %>%
+  summarise(total_num = sum(total_individuals), .groups = "drop") %>%
+  mutate(overall_percent = (total_num / sum(total_num)) * 100)
+
+#cleaning table appearance
+table_overall_species_percent <- overall_species_percent %>% 
+    mutate(
+    across(overall_percent, round, 2)) %>%
+  arrange(desc(total_num)) %>%
+ rename("Species name" = "species_name",
+        "Total individuals" = "total_num",
+        "Percentage" = "overall_percent")
+
+
+datatable(table_overall_species_percent,
+          options = list(pageLength = 15),
+          rownames = FALSE)
+
+```
+
+##  Juvenile euphauiid size distribution
+
+The plot below shows the distribution of juvenile euphausiid body volume for E. pacifica, T. spinifera, and N. difficilis. Violin plots represent the density distribution of volume-weighted body size. Embedded boxplots indicate the median and interquartile range.
+
+```{r, fig.width=10, fig.height=4}
+# juves violin
+ggplot(df_vol %>% filter(type == "juv"),
+       aes(x = species_code,
+           y = volume_weighted,
+           fill = species_code)) +
+  
+  geom_violin(alpha = 0.6,
+              trim = FALSE,
+              color = NA) +
+  
+  geom_boxplot(width = 0.15,
+               outlier.shape = NA,
+               alpha = 0.8) +
+  
+  scale_fill_manual(values = species_colors) +
+  
+  scale_x_discrete(labels = c(
+    EPAC = expression(italic("E. pacifica")),
+    TSPIN = expression(italic("T. spinifera")),
+    NDIF = expression(italic("N. difficilis"))
+  )) +
+  labs(
+  x = NULL,
+  y = expression("Body volume ("*mm^3*")")
+) +
+  
+  theme_minimal()
+```
+
+## Adult euphausiid size distribution
+
+The plot below shows the distribution of adult euphausiid body volume for female and male E. pacifica, T. spinifera, and N. difficilis. Violin plots represent the density distribution of body volume, while embedded boxplots indicate the median and interquartile range for each sex within each species.
+
+```{r, fig.width=10, fig.height=4}
+ggplot(df_vol %>% filter(type %in% c("f", "m")),
+       aes(x = type,
+           y = volume_weighted,
+           fill = type)) +
+
+  geom_violin(alpha = 0.6,
+              trim = FALSE,
+              color = NA) +
+
+  geom_boxplot(width = 0.15,
+               outlier.shape = NA,
+               alpha = 0.8) +
+
+  facet_wrap(~ species_code,
+             labeller = labeller(
+               species_code = as_labeller(c(
+                 EPAC = "italic('E. pacifica')",
+                 TSPIN = "italic('T. spinifera')",
+                 NDIF = "italic('N. difficilis')"
+               ), label_parsed)
+             )) +
+
+  scale_fill_manual(values = c(
+    f = "#F8765C",
+    m = "#FDE725FF"
+  ),
+  labels = c(
+    f = "female",
+    m = "male"
+  )) +
+
+  labs(x = NULL,
+  y = expression("Body volume ("*mm^3*")")
+) +
+  
+  theme_minimal()
+```
+
+## Time series of body volume and MOCI anomalies
+
+The figure below shows annual standardized anomalies in adult euphausiid body volume and the central CCE Multivariate Ocean Climate Indicator (MOCI) from 2005–2025 for E. pacifica, T. spinifera, and N. difficilis. Colored bars represent annual body volume anomalies, calculated relative to the long-term mean body volume for each species, while the black line and points represent annual MOCI anomalies relative to the long-term mean MOCI. Positive anomalies indicate values above the long-term average, and negative anomalies indicate values below the average.
+
+```{r}
+prep_anomaly_data <- function(df, species_name) {
+  
+  df %>%
+    filter(species_code == species_name) %>%
+    mutate(year = year(base_date)) %>%
+    
+    group_by(year, species_code) %>%
+    summarise(
+      size_mean = mean(volume_weighted, na.rm = TRUE),
+      moci_mean = mean(moci, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    
+  mutate(
+  size_anomaly = (size_mean - mean(size_mean, na.rm = TRUE)) / sd(size_mean, na.rm = TRUE),
+  moci_anomaly = (moci_mean - mean(moci_mean, na.rm = TRUE)) / sd(moci_mean, na.rm = TRUE)
+)
+  
+
+}
+```
+
+```{r}
+epac_anom <- prep_anomaly_data(df_vol, "EPAC")
+tspin_anom <- prep_anomaly_data(df_vol, "TSPIN")
+ndif_anom <- prep_anomaly_data(df_vol, "NDIF")
+
+plot_all_anom <- bind_rows(
+  epac_anom,
+  tspin_anom,
+  ndif_anom
+) %>%
+  mutate(
+    species_code = factor(species_code,
+                          levels = c("EPAC", "TSPIN", "NDIF"))
+  )
+```
+
+```{r, fig.width=8, fig.height=8}
+# Make sure facet/order is consistent
+plot_all_anom <- plot_all_anom %>%
+  mutate(
+    species_code = factor(species_code, levels = c("EPAC", "TSPIN", "NDIF"))
+  )
+
+panel_labels <- data.frame(
+  species_code = factor(c("EPAC", "TSPIN", "NDIF"),
+                        levels = c("EPAC", "TSPIN", "NDIF")),
+  label = c("a", "b", "c"),
+  year = min(plot_all_anom$year, na.rm = TRUE),
+  y = max(c(plot_all_anom$size_anomaly,
+            plot_all_anom$moci_anomaly), na.rm = TRUE)
+)
+
+ggplot(plot_all_anom, aes(x = year)) +
+  
+  geom_col(aes(y = size_anomaly, fill = species_code),
+           alpha = 1) +
+  
+  geom_line(aes(y = moci_anomaly, group = 1),
+            color = "black",
+            linewidth = 1.2) +
+  
+  geom_point(aes(y = moci_anomaly,
+                 color = moci_anomaly > 0),
+             size = 3) +
+  
+  geom_hline(yintercept = 0, linewidth = 0.4) +
+  
+  geom_text(data = panel_labels,
+            aes(x = year, y = y, label = label),
+            inherit.aes = FALSE,
+            hjust = 0,
+            vjust = 1,
+            fontface = "bold",
+            size = 5) +
+  
+  facet_wrap(~ species_code, nrow = 3) +
+  
+  scale_fill_manual(
+    name = "Species",
+    values = species_colors,
+    labels = c(
+      EPAC = expression(italic("Euphausia pacifica")),
+      TSPIN = expression(italic("Thysanoessa spinifera")),
+      NDIF = expression(italic("Nematoscelis difficilis"))
+    )
+  ) +
+  
+  scale_color_manual(
+    name = "MOCI anomaly",
+    values = c(
+      "TRUE" = "#FF0068",
+      "FALSE" = "#4B04FC"
+    ),
+    labels = c(
+      "TRUE" = "Above zero",
+      "FALSE" = "Below zero"
+    )
+  ) +
+  
+  labs(
+    title = "Time series of anomalies in MOCI and adult euphausiid body size",
+    x = "Year",
+    y = "Body size anomalies"
+  ) +
+  
+  theme_minimal(base_size = 13) +
+  theme(
+    strip.text = element_blank(),
+    legend.position = "right",
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    axis.ticks = element_line(color = "black"),
+    plot.title = element_text(face = "bold")
+  )
+```
+
+## Juvenile body volume response to ocean climate
+
+The figure below shows generalized additive model (GAM) predictions for the relationship between MOCI and juvenile body volume in E. pacifica, T. spinifera, and N. difficilis. Lines represent the predicted log-transformed body volume, and shaded ribbons show 95% confidence intervals. Models were weighted by the number of individuals measured per sample.
+
+```{r}
+juv_epac <- df_vol %>% filter(species_code == "EPAC", type == "juv")
+juv_ndif <- df_vol %>% filter(species_code == "NDIF", type == "juv")
+juv_tspin <- df_vol %>% filter(species_code == "TSPIN", type == "juv")
+```
+
+```{r}
+run_gamm_4juvenile <- function(df_sub) {
+  
+  # clean and prepare data
+  df_sub <- df_sub %>%
+    filter(
+      !is.na(volume_weighted),
+      !is.na(moci),
+      !is.na(n),
+      n > 0,
+      !is.na(cruise)
+    ) %>%
+    mutate(
+      cruise = factor(cruise),
+      response = log(volume_weighted + 1)
+    )
+  
+  # fit model
+  model <- gam(
+    response ~
+      s(moci, k = 5),
+    weights = n,
+    data = df_sub,
+    method = "REML"
+  )
+  
+  return(model)
+}
+```
+
+```{r}
+m_juv_4epac  <- run_gamm_4juvenile(juv_epac)
+m_juv_4ndif  <- run_gamm_4juvenile(juv_ndif)
+m_juv_4tspin <- run_gamm_4juvenile(juv_tspin)
+```
+
+```{r}
+#summary(m_juv_4epac)
+#summary(m_juv_4tspin)
+#summary(m_juv_4ndif)
+```
+
+```{r}
+make_gam_plot_data_4juv <- function(model, species_name) {
+  
+  model_data <- model$model
+  
+  newdata <- expand.grid(
+    moci = seq(min(model_data$moci, na.rm = TRUE),
+               max(model_data$moci, na.rm = TRUE),
+               length.out = 200)
+  )
+  
+  preds <- predict(model, newdata = newdata, se.fit = TRUE, type = "response")
+  
+  newdata <- newdata %>%
+    mutate(
+      fit = preds$fit,
+      se = preds$se.fit,
+      lower = fit - 1.96 * se,
+      upper = fit + 1.96 * se,
+      species_code = species_name
+    )
+  
+  return(newdata)
+}
+
+plot_epac_4juv  <- make_gam_plot_data_4juv(m_juv_4epac, "EPAC")
+plot_tspin_4juv <- make_gam_plot_data_4juv(m_juv_4tspin, "TSPIN")
+plot_ndif_4juv  <- make_gam_plot_data_4juv(m_juv_4ndif, "NDIF")
+
+```
+
+```{r, fig.width=12, fig.height=4}
+plot_all_4juv <- bind_rows(plot_epac_4juv, plot_tspin_4juv, plot_ndif_4juv)
+
+species_labels <- c(
+  EPAC = "E. pacifica",
+  TSPIN = "T. spinifera",
+  NDIF = "N. difficilis"
+)
+
+species_labeller <- as_labeller(c(
+  EPAC = "italic('E. pacifica')",
+  TSPIN = "italic('T. spinifera')",
+  NDIF = "italic('N. difficilis')"
+), label_parsed)
+
+ggplot(plot_all_4juv,
+       aes(x = moci, y = fit, color = species_code, fill = species_code)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.16, color = NA) +
+  geom_line(linewidth = 1.1) +
+  facet_wrap(
+    ~ species_code,
+    nrow = 1,
+    labeller = species_labeller
+  ) +
+  scale_color_manual(values = species_colors) +
+  scale_fill_manual(values = species_colors) +
+  labs(
+    x = "MOCI",
+    y = "Predicted log(body volume + 1)"
+  ) +
+  scale_y_continuous(limits = c(0, 2), breaks = seq(0, 2, by = 1)) +
+  coord_cartesian(xlim = c(-5, 8)) +
+  theme_minimal(base_size = 13) +
+  theme(
+    strip.text = element_text(face = "plain"),
+    legend.position = "none",
+    axis.line = element_line(color = "black"),
+    axis.ticks = element_line(color = "black"),
+    panel.background = element_rect(fill = "transparent", color = NA),
+    plot.background = element_rect(fill = "transparent", color = NA),
+    legend.background = element_rect(fill = "transparent", color = NA),
+    legend.box.background = element_rect(fill = "transparent", color = NA),
+    strip.background = element_rect(fill = "transparent", color = NA)
+  )
+```
+
+```{r}
+
+
+gam_summary_4juv <- tibble(
+  species_code = c("EPAC", "TSPIN", "NDIF"),
+  species = c("E. pacifica", "T. spinifera", "N. difficilis"),
+  model = list(
+    m_juv_4epac,
+    m_juv_4tspin,
+    m_juv_4ndif
+  )
+) %>%
+  rowwise() %>%
+  mutate(
+    p_value = summary(model)$s.table[1, "p-value"],
+    r_squared = summary(model)$r.sq,
+    deviance_explained = summary(model)$dev.expl
+  ) %>%
+  ungroup() %>%
+  mutate(
+    p_value = sprintf("%.8f", p_value),
+    r_squared = round(r_squared, 3),
+    deviance_explained = round(deviance_explained * 100, 1)
+  ) %>%
+  select(
+    Species = species,
+    `p-value` = p_value,
+    `Adjusted R²` = r_squared,
+    `Deviance Explained (%)` = deviance_explained
+  )
+
+datatable(
+  gam_summary_4juv,
+  rownames = FALSE,
+  options = list(
+    pageLength = 5,
+    dom = "t"
+  )
+)
+```
+
+## Adult body volume response to ocean climate
+
+The figure below shows GAM predictions for the relationship between MOCI and adult euphausiid body volume by sex in the three dominant species. Lines represent predicted log-transformed body volume for females and males, and shaded ribbons show approximate 95% confidence intervals. Models were weighted by the number of individuals measured per sample.
+
+```{r}
+
+run_gamm_4adult <- function(df_sub) {
+  
+  df_sub <- df_sub %>%
+    filter(
+      !is.na(volume_weighted),
+      !is.na(moci),
+      !is.na(n),
+      n > 0,
+      !is.na(type),
+      !is.na(line)
+    ) %>%
+    mutate(
+      type = factor(type),
+      line = factor(line),
+      cruise = factor(cruise),
+      response = log(volume_weighted + 1)
+    )
+  
+  model <- gam(
+    response ~
+      type +
+      s(moci, by = type, k = 6),
+    weights = n,
+    data = df_sub,
+    method = "REML"
+  )
+  
+  return(model)
+}
+
+
+adult_epac <- df_vol %>% filter(species_code == "EPAC", type %in% c("f", "m"))
+adult_ndif <- df_vol %>% filter(species_code == "NDIF", type %in% c("f", "m"))
+adult_tspin <- df_vol %>% filter(species_code == "TSPIN", type %in% c("f", "m"))
+```
+
+```{r}
+m_adult_4epac <- run_gamm_4adult(adult_epac)
+m_adult_4tspin <- run_gamm_4adult(adult_tspin)
+m_adult_4ndif <- run_gamm_4adult(adult_ndif)
+```
+
+```{r}
+make_gam_plot_data_bysex <- function(model, species_name) {
+  
+  model_data <- model$model
+  
+  newdata <- expand.grid(
+    moci = seq(
+      min(model_data$moci, na.rm = TRUE),
+      max(model_data$moci, na.rm = TRUE),
+      length.out = 200
+    ),
+    type = levels(model_data$type)
+  )
+  
+  newdata$type <- factor(
+    newdata$type,
+    levels = levels(model_data$type)
+  )
+  
+  preds <- predict(
+    model,
+    newdata = newdata,
+    se.fit = TRUE,
+    type = "response"
+  )
+  
+  plot_df <- newdata %>%
+    mutate(
+      fit = preds$fit,
+      se = preds$se.fit,
+      lower = fit - 1.96 * se,
+      upper = fit + 1.96 * se,
+      species_code = species_name
+    ) %>%
+    mutate(
+      species_code = factor(
+        species_code,
+        levels = c("EPAC", "TSPIN", "NDIF")
+      ),
+      type = factor(
+        type,
+        levels = c("f", "m"),
+        labels = c("Female", "Male")
+      )
+    )
+  
+  plot_df
+}
+```
+
+```{r}
+plot_epac_sex  <- make_gam_plot_data_bysex(m_adult_4epac, "EPAC")
+plot_tspin_sex <- make_gam_plot_data_bysex(m_adult_4tspin, "TSPIN")
+plot_ndif_sex  <- make_gam_plot_data_bysex(m_adult_4ndif, "NDIF")
+
+plot_all_sex <- bind_rows(
+  plot_epac_sex,
+  plot_tspin_sex,
+  plot_ndif_sex
+)
+```
+
+```{r, fig.width=12, fig.height=4}
+species_labeller <- as_labeller(c(
+  EPAC = "italic('E. pacifica')",
+  TSPIN = "italic('T. spinifera')",
+  NDIF = "italic('N. difficilis')"
+), label_parsed)
+
+
+ggplot(
+  plot_all_sex,
+  aes(
+    x = moci,
+    y = fit,
+    color = type,
+    fill = type
+  )
+) +
+  geom_ribbon(
+    aes(ymin = lower, ymax = upper),
+    alpha = 0.16,
+    color = NA
+  ) +
+  geom_line(linewidth = 1.1) +
+  
+  facet_wrap(
+  ~ species_code,
+  nrow = 1,
+  labeller = species_labeller
+) +
+  
+  scale_color_manual(
+    values = c(
+      "Female" = "#F8765C",
+      "Male" = "#FDE725FF"
+    )
+  ) +
+  
+  scale_fill_manual(
+    values = c(
+      "Female" = "#F8765C",
+      "Male" = "#FDE725FF"
+    )
+  ) +
+  
+  scale_y_continuous(
+    breaks = seq(1, 4, by = 1)
+  ) +
+  
+  coord_cartesian(
+    xlim = c(-5, 8),
+    ylim = c(1, 4)
+  ) +
+  
+  labs(
+    x = "MOCI",
+    y = "Predicted log(body volume + 1)",
+    color = "Sex",
+    fill = "Sex"
+  ) +
+  
+  theme_minimal(base_size = 13) +
+  
+  theme(
+    strip.text = element_text(face = "plain"),
+    axis.line.x = element_line(color = "black"),
+    axis.ticks.x = element_line(color = "black"),
+    axis.ticks.length = unit(3, "pt"),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.background = element_rect(fill = "transparent", color = NA),
+    plot.background  = element_rect(fill = "transparent", color = NA)
+  )
+```
+
+```{r}
+gam_summary_4adult <- tibble(
+  species_code = c("EPAC", "TSPIN", "NDIF"),
+  species = c("E. pacifica", "T. spinifera", "N. difficilis"),
+  model = list(
+    m_adult_4epac,
+    m_adult_4tspin,
+    m_adult_4ndif
+  )
+) %>%
+  rowwise() %>%
+  mutate(
+    p_value_female = summary(model)$s.table["s(moci):typef", "p-value"],
+    p_value_male = summary(model)$s.table["s(moci):typem", "p-value"],
+    r_squared = summary(model)$r.sq,
+    deviance_explained = summary(model)$dev.expl
+  ) %>%
+  ungroup() %>%
+  mutate(
+    p_value_female = sprintf("%.8f", p_value_female),
+    p_value_male = sprintf("%.8f", p_value_male),
+    r_squared = round(r_squared, 3),
+    deviance_explained = round(deviance_explained * 100, 1)
+  ) %>%
+  select(
+    Species = species,
+    `Female p-value` = p_value_female,
+    `Male p-value` = p_value_male,
+    `Adjusted R²` = r_squared,
+    `Deviance Explained (%)` = deviance_explained
+  )
+
+datatable(
+  gam_summary_4adult,
+  rownames = FALSE,
+  options = list(
+    pageLength = 5,
+    dom = "t"
+  )
+)
+```
+
+## Visualization of adult body volume and environmental variability
+
+The interactive plots below show cruise-specific adult euphausiid body volume for E. pacifica, T. spinifera, and N. difficilis alongside multiple environmental indices and their monthly lags. Bars represent mean adult body volume for each cruise, lines show scaled environmental variables. Each index can be toggled on and off through the interactive legend to show visual comparison of body volume patterns with oceanographic and climate variability across cruises.
+
+```{r}
+#organizing moci data mixed with other indices
+moci_indices <- moci_data %>%
+  select(Year, Season, North.California..38.42N.) %>%
+  rename(value_raw = North.California..38.42N.) %>%
+  mutate(season_order = case_when(
+      Season == "JFM" ~ 1,
+      Season == "AMJ" ~ 2,
+      Season == "JAS" ~ 3,
+      Season == "OND" ~ 4)) %>%
+  arrange(Year, season_order) %>%
+  mutate(
+    MOCI_lag0 = value_raw,
+    MOCI_lag1 = lag(value_raw, 1),
+    MOCI_lag2 = lag(value_raw, 2),
+    MOCI_lag3 = lag(value_raw, 3)) %>%
+  select(Year, Season, starts_with("MOCI_lag")) %>%
+  pivot_longer(
+    cols = starts_with("MOCI_lag"),
+    names_to = "variable",
+    values_to = "value") %>%
+  mutate(
+    index = "MOCI",
+    lag = as.numeric(gsub("MOCI_lag", "", variable))) %>%
+  select(Year, Season, variable, index, lag, value) %>%
+  arrange(Year, Season, lag)
+```
+
+```{r}
+#prepping to add other indices
+cruise_lookup <- data_all %>%
+  mutate(
+    Year = year(base_date),
+    Month = month(base_date),
+    Season = case_when(
+      Month %in% c(1, 2, 3) ~ "JFM",
+      Month %in% c(4, 5, 6) ~ "AMJ",
+      Month %in% c(7, 8, 9) ~ "JAS",
+      Month %in% c(10, 11, 12) ~ "OND")) %>%
+  select(cruise, Year, Season) %>%
+  distinct() 
+
+moci_indices_with_cruise <- moci_indices %>%
+  left_join(cruise_lookup, by = c("Year", "Season")) %>%
+  select(-Year, -Season) %>% drop_na()
+
+climate <- climate_raw %>%
+  filter(!is.na(cruise)) %>%
+  rename_with(~ str_replace(., "-(\\d+)", "_lag\\1")) %>%
+    mutate(cruise = case_when(
+    cruise == "ACM1705" ~ "ACC1705", 
+    cruise == "ACD1807" ~ "ACC1807",
+    cruise == "ACM2205" ~ "ACC2205", 
+    cruise == "ACD2206" ~ "ACC2206",
+    
+    TRUE ~ cruise))
+
+#adding lags in a separate column
+df_climate <- climate %>% 
+  select(cruise, SOI, SOI_lag1, SOI_lag2, SOI_lag3, PDO, PDO_lag1, PDO_lag2, PDO_lag3, NPGO, NPGO_lag1, NPGO_lag2, NPGO_lag3, CUTI, CUTI_lag1, CUTI_lag2, CUTI_lag3, BEUTI, BEUTI_lag1, BEUTI_lag2, BEUTI_lag3, UI, UI_lag1, UI_lag2, UI_lag3, SEFI_SST_mean, SEFI_SST_anomalies, SEFI_SST_mean_lag1, SEFI_SST_anomalies_lag1, SEFI_SST_mean_lag2, SEFI_SST_anomalies_lag2, SEFI_SST_mean_lag3, SEFI_SST_anomalies_lag3)  %>%
+  pivot_longer(cols = -cruise,
+    names_to = "variable",
+    values_to = "value") %>%
+  
+  mutate(index = str_extract(variable, "^[^_]+"),     
+    lag = str_extract(variable, "(?<=lag)\\d+"))   %>%
+  
+  mutate(lag = ifelse(is.na(lag), 0, as.numeric(lag))) %>%
+
+  mutate(index = case_when(
+    index == "SEFI" ~ "SST", TRUE ~ index))
+```
+
+```{r}
+# adding all indices in one df:
+df_all_indices <- bind_rows(df_climate, moci_indices_with_cruise)
+#Joining all indices with krill data:
+data_all_climate <- left_join(df_vol, df_all_indices, by = "cruise")
+```
+
+```{r}
+species_colors <- c(
+  "EPAC" = "#440154FF",
+  "TSPIN" = "#7AD151FF",
+  "NDIF" = "#249F87"
+)
+
+plot_species_volume <- function(species, species_label) {
+
+  species_color <- species_colors[[species]]
+
+  df_volume <- data_all_climate %>%
+    filter(species_code == species, type %in% c("f", "m")) %>%
+    group_by(cruise, variable, value, species_code) %>%
+    summarise(
+      volume_weighted = mean(volume_weighted, na.rm = TRUE),
+      .groups = "drop"
+    )
+
+  vol_min <- min(df_volume$volume_weighted, na.rm = TRUE)
+  vol_max <- max(df_volume$volume_weighted, na.rm = TRUE)
+
+  df_plot_scaled <- df_volume %>%
+    group_by(variable) %>%
+    mutate(
+      var_min = min(value, na.rm = TRUE),
+      var_max = max(value, na.rm = TRUE),
+      value_scaled = ifelse(
+        var_max == var_min,
+        (vol_min + vol_max) / 2,
+        vol_min + (value - var_min) * (vol_max - vol_min) / (var_max - var_min)
+      )
+    ) %>%
+    ungroup() %>%
+    select(-var_min, -var_max)
+
+  p <- plot_ly()
+
+  p <- p %>%
+    add_bars(
+      data = df_plot_scaled %>% distinct(cruise, volume_weighted),
+      x = ~cruise,
+      y = ~volume_weighted,
+      name = "Volume weighted",
+      marker = list(color = species_color),
+      opacity = 0.6
+    )
+
+  vars <- unique(df_plot_scaled$variable)
+
+  for (v in vars) {
+
+    df_sub <- df_plot_scaled %>%
+      filter(variable == v)
+
+    p <- p %>%
+      add_trace(
+        data = df_sub,
+        x = ~cruise,
+        y = ~value_scaled,
+        type = "scatter",
+        mode = "lines+markers",
+        name = v,
+        visible = "legendonly"
+      )
+  }
+
+  p <- p %>%
+    layout(
+      title = list(
+        text = paste0("<i>", species_label, "</i>")
+      ),
+      xaxis = list(title = "Cruise"),
+      yaxis = list(title = "Scaled value"),
+      legend = list(
+        itemclick = "toggle",
+        itemdoubleclick = "toggleothers"
+      ),
+      barmode = "overlay"
+    )
+
+  return(p)
+}
+```
+
+```{r}
+plot_species_volume(species = "EPAC", species_label = "E. pacifica")
+
+```
+
+```{r}
+plot_species_volume(species = "TSPIN", species_label = "T. spinifera")
+
+```
+
+```{r}
+plot_species_volume(species = "NDIF", species_label = "N. difficilis")
+```
