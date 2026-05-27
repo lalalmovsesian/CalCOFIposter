@@ -548,7 +548,7 @@ ggplot(plot_all_4juv,
   ) +
   scale_y_continuous(limits = c(0, 2), breaks = seq(0, 2, by = 1)) +
   coord_cartesian(xlim = c(-5, 8)) +
-  theme_minimal(base_size = 13) +
+  theme_minimal(base_size = 18) +
   theme(
     strip.text = element_text(face = "plain"),
     legend.position = "none",
@@ -773,7 +773,7 @@ ggplot(
     fill = "Sex"
   ) +
   
-  theme_minimal(base_size = 13) +
+  theme_minimal(base_size = 18) +
   
   theme(
     strip.text = element_text(face = "plain"),
@@ -786,6 +786,9 @@ ggplot(
     plot.background  = element_rect(fill = "transparent", color = NA)
   )
 ```
+
+
+
 
 ```{r}
 gam_summary_4adult <- tibble(
@@ -987,10 +990,13 @@ plot_species_volume <- function(species, species_label) {
       ),
       xaxis = list(title = "Cruise"),
       yaxis = list(title = "Scaled value"),
-      legend = list(
-        itemclick = "toggle",
-        itemdoubleclick = "toggleothers"
-      ),
+        legend = list(
+      orientation = "h",
+      x = 0,
+      y = -0.25,
+      itemclick = "toggle",
+      itemdoubleclick = "toggleothers"
+    ),
       barmode = "overlay"
     )
 
